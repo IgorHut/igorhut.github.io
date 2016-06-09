@@ -1,0 +1,170 @@
+---
+title: "Practical Machine Learning by Coursera - Project Assignment"
+author: "Igor Hut"
+date: '01 jun 2016 '
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+## Introduction  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information regarding the whole experiment is available from the website here: <http://groupware.les.inf.puc-rio.br/har>. 
+
+## Initial preparation - Loading necessary packages and basic data preparation 
+```{r, cache = T}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+```
+### Downloading the data
+```{r, cache = T}
+trainDataUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testDataUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainData <- "./data/pml-training.csv"
+testData  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainData)) {
+  download.file(trainDatUrl, destfile=trainData)
+}
+if (!file.exists(testData)) {
+  download.file(testDataUrl, destfile=testData)
+}
+```  
+### Reading in and checking the data
+After downloading the data from the data source, we can read the two csv files into two data frames.  
+```{r, cache = T}
+trainDataRaw <- read.csv("./data/pml-training.csv")
+testDataRaw <- read.csv("./data/pml-testing.csv")
+dim(trainDataRaw)
+dim(testDataRaw)
+```
+As can be observed the training data set contains 19622 observations and 160 variables, while the testing data set contains 20 observations and 160 variables. The "classe" variable in the training set is the outcome to predict. 
+
+### Spliting the data set
+
+We are going to split the training data set into a pure training data set (70%) and a validation data set (30%).The former will be used to perform cross validation in forthcoming steps.  
+
+```{r, cashe=T}
+set.seed(33)
+inTrain <- createDataPartition(y=trainDataRaw$classe, p=0.7, list=F)
+trainSet <-trainDataRaw[inTrain, ]
+testSet<- trainDataRaw[-inTrain, ]
+```
+
+### Cleaning the data
+
+In this section we are going to reduce the number of features by removing variables with nearly zero variance, variables that are almost always NA, as well as variables that wouldn't play any meaningful role in the prediction task. 
+
+```{r, cache = T}
+# Removing vars with nearly zero variance
+nzv <- nearZeroVar(trainSet)
+trainSet <- trainSet[, -nzv]
+testSet <- testSet[, -nzv]
+
+# Removing vars that are almost always NA
+mostlyNA <- sapply(trainSet, function(x) mean(is.na(x))) > 0.95
+trainSet <- trainSet[, mostlyNA==F]
+testSet <- testSet[, mostlyNA==F]
+
+# Removing variables that don't play any meaningful role in the prediction task (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp). These are the first five variables in the given data set.
+
+trainSet <- trainSet[, -(1:5)]
+testSet <- testSet[, -(1:5)]
+
+dim(trainSet)
+dim(testSet)
+
+```
+Now, the cleaned training data set contains 13737 observations and 54 variables, while the cross validation testing data set contains 5885 observations and 54 variables. The "classe" variable is still in the cleaned training set.
+
+
+## Data modeling
+
+For the begining we will choose the **Random Forest** ML algorithm to fit a predictive model for activity recognition, and check how it behaves. This is our first choice since **RF** automatically selects important variables and is quite robust to correlated covariates & outliers in general. We will use **5-fold cross validation** when applying the algorithm.  
+
+```{r, cache = T}
+
+# Train function will be using 5-fold CV to select optimal tuning parameters
+trainFit <- trainControl(method="cv", number=5, verboseIter=F)
+
+# Fitting the model on trainSet
+modelFit <- train(classe ~ ., data=trainSet, method="rf", trControl=trainFit)
+
+# Print final model to check which tuning parameters it chose
+modelFit$finalModel
+
+```
+
+It can be seen that it decided to use 500 trees and try 27 variables at each split.
+
+Further, we will estimate the performance of the model on the validation data set. 
+
+
+
+### Model evaluation 
+
+We are using the fitted model to predict the label (“classe”) in `testSet`. Confusion matrix enables us to compare the predicted versus the actual labels.
+
+```{r, cache = T}
+
+preds <- predict(modelFit, newdata=testSet)
+
+# Show the confusion matrix to get estimates of the accuracy and out-of-sample error
+confusionMatrix(testSet$classe, preds)
+```
+
+So, the estimated accuracy of the model is 99.72% and the estimated out-of-sample error is 0.28%.
+This is quite a promising result, thus we will use **RF** algorithm to perform prediction on the given test set of 20 cases.
+
+### Decision tree visualization
+
+```{r, cache = T}
+tree <- rpart(classe ~ ., data=trainSet, method="class")
+prp(tree) # this "fast" plot is better for visualisation of a complex tree than i.e. fancyRpartPlot which would be crammed
+
+```
+
+## Predicting for test data set
+
+### Retraining the model
+
+Before predicting on the test set, we will train the model, again, but this time on the full training set (`trainDataRaw`), rather than use a model obtained by fitting the reduced training set (`trainSet`). This should lead to more accurate predictions. Therefore we will repeat the whole data preprocessing procedure with `trainDataRaw` and `testDataRaw`.
+
+
+```{r, cache = T}
+# Removing vars with nearly zero variance
+nzv <- nearZeroVar(trainDataRaw)
+trainFinal <- trainDataRaw[, -nzv]
+testFinal <- testDataRaw[, -nzv]
+
+# Removing vars that are almost always NA
+mostlyNA <- sapply(trainFinal, function(x) mean(is.na(x))) > 0.95
+trainFinal <- trainFinal[, mostlyNA==F]
+testFinal <- testFinal[, mostlyNA==F]
+
+# Removing variables that don't play any meaningful role in the prediction task (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp). These are the first five variables in the given data set.
+
+trainFinal <- trainFinal[, -(1:5)]
+testFinal <- testFinal[, -(1:5)]
+
+# Re-train the model with the full training set
+
+trainFit <- trainControl(method="cv", number=5, verboseIter=F)
+modelFinal <- train(classe ~ ., data=trainFinal, method="rf", trControl=trainFit)
+```  
+
+### Aplying the final model for prediction on the test data set
+
+```{r, cache=T}
+
+preds <- predict(modelFinal, newdata=testFinal)
+preds
+
+```
+
+
